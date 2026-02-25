@@ -39,12 +39,7 @@ export default function App() {
   // Modal States
   const [activeModal, setActiveModal] = useState<string | null>(null);
   
-  // Work Log State
-  const [logInput, setLogInput] = useState('');
-  const [logOutput, setLogOutput] = useState('');
-  const [isGeneratingLog, setIsGeneratingLog] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
-  const [sharedLogs, setSharedLogs] = useState<{id: number, content: string, created_at: string}[]>([]);
+
   // Device Modal State
   const [activeDevice, setActiveDevice] = useState<string | null>(null);
   const [deviceTab, setDeviceTab] = useState<'ai' | 'guide'>('ai');
@@ -244,38 +239,7 @@ export default function App() {
     }
   }, [activeModal]);
 
-  const fetchWorkLogs = async () => {
-    try {
-      const res = await fetch('/api/worklogs');
-      const contentType = res.headers.get("content-type");
-      if (res.ok && contentType && contentType.includes("application/json")) {
-        const data = await res.json();
-        setSharedLogs(data);
-      }
-    } catch (e) { console.error(e); }
-  };
 
-  const saveWorkLog = async () => {
-    if (!logOutput) return;
-    try {
-      const res = await fetch('/api/worklogs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: logOutput })
-      });
-      if (!res.ok) throw new Error("API Error");
-      alert("已儲存並同步至全院系統");
-      fetchWorkLogs();
-    } catch (e) {
-      alert("儲存失敗");
-    }
-  };
-
-  useEffect(() => {
-    if (activeModal === 'worklog') {
-      fetchWorkLogs();
-    }
-  }, [activeModal]);
 
   // Q&A State
   const [qaInput, setQaInput] = useState('');
@@ -391,46 +355,11 @@ export default function App() {
     return `${year}/${month}/${day} ${weekday}`;
   };
 
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(logOutput);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy!', err);
-    }
-  };
+
 
   // --- Gemini API Calls ---
 
-  const generateWorkLog = async () => {
-    if (!logInput.trim()) return;
-    setIsGeneratingLog(true);
-    setLogOutput('');
 
-    const instruction = `你是一位專業的醫學影像部（放射科）主管。請將放射師輸入的「零散交班事項」整理成「每日交班紀錄」。
-要求：
-1. 格式必須整齊、條列式，包含：【設備狀態】、【異常事件】、【待辦事項】等標題（沒有的項目就省略）。
-2. 語氣專業嚴謹，適合正式歸檔。
-3. 若提及病人，必須一律使用「受檢者」或「客戶」稱呼，絕對不可使用「病患」或「病人」。
-4. 語言：繁體中文。`;
-
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [{ parts: [{ text: logInput }] }],
-        config: {
-          systemInstruction: instruction,
-        }
-      });
-      setLogOutput(response.text || "無法生成內容，請稍後再試。");
-    } catch (error) {
-      console.error("Gemini API Error:", error);
-      setLogOutput("⚠️ 發生錯誤：伺服器目前繁忙，請稍後再試。");
-    } finally {
-      setIsGeneratingLog(false);
-    }
-  };
 
   const askQA = async (question: string) => {
     if (!question.trim()) return;
@@ -574,8 +503,10 @@ export default function App() {
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <button 
-                  onClick={() => setActiveModal('worklog')}
+                <a 
+                  href="https://docs.google.com/spreadsheets/d/1XVPu-el_sXaHqwjXdlSD1ESfZtXogE5yCm5yUKzStZ8/edit?gid=1469824280#gid=1469824280"
+                  target="_blank"
+                  rel="noreferrer"
                   id="card-wl" 
                   className="bg-app-card hover:bg-app-card-hover rounded-xl p-2.5 flex items-center gap-3 transition-all border border-transparent hover:border-blue-500/50 group text-left w-full relative overflow-hidden"
                 >
@@ -583,8 +514,8 @@ export default function App() {
                   <div className="w-8 h-8 rounded-lg bg-slate-800/50 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform relative z-10">
                     <ClipboardEdit className="w-4 h-4 text-yellow-400" />
                   </div>
-                  <h4 className="text-sm font-bold text-white relative z-10">✨ AI 工作日誌</h4>
-                </button>
+                  <h4 className="text-sm font-bold text-white relative z-10">工作日誌</h4>
+                </a>
                 
                 <a href="https://drive.google.com/drive/folders/1jvhBzhLEmrlerGmTlCSohnrSl5t8hwW9" target="_blank" rel="noreferrer" id="card-db" className="bg-app-card hover:bg-app-card-hover rounded-xl p-2.5 flex items-center gap-3 transition-all border border-transparent hover:border-slate-600 group">
                   <div className="w-8 h-8 rounded-lg bg-slate-800/50 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
@@ -720,97 +651,8 @@ export default function App() {
 
       {/* --- Modals --- */}
 
-      {/* Modal 1: Work Log */}
-      <div className={`modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 ${activeModal === 'worklog' ? 'active' : ''}`}>
-        <div className="modal-content bg-app-card border border-slate-700 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-full overflow-hidden">
-          <div className="p-4 border-b border-slate-700/80 flex justify-between items-center bg-[#1a1e29]">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 bg-blue-500/20 rounded-md text-blue-400">
-                <Bot className="w-5 h-5" />
-              </div>
-              <h3 className="text-lg font-bold text-white">✨ AI 智慧交班日誌生成器</h3>
-            </div>
-            <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-white transition-colors">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="p-5 flex flex-col gap-4 overflow-y-auto">
-            <div>
-              <label className="block text-sm font-bold text-slate-300 mb-2">請輸入您的零散交班事項 (Draft Notes)：</label>
-              <textarea 
-                value={logInput}
-                onChange={(e) => setLogInput(e.target.value)}
-                rows={3} 
-                className="w-full bg-[#0f1219] border border-slate-700 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors resize-none placeholder-slate-600" 
-                placeholder="例如：US2探頭接觸不良已報修，下午3點CT有急診插單，造影劑快用完了提醒總務補充..."
-              ></textarea>
-            </div>
-            
-            <div className="flex justify-end">
-              <button 
-                onClick={generateWorkLog}
-                disabled={isGeneratingLog || !logInput.trim()}
-                className={`bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 transition-colors ${isGeneratingLog ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                {isGeneratingLog ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                生成正式紀錄
-              </button>
-            </div>
+      {/* Modal 1: Work Log - REMOVED */}
 
-            <div className="flex-1 flex flex-col min-h-[150px]">
-              <label className="block text-sm font-bold text-slate-300 mb-2">生成結果 (Formal Log)：</label>
-              <div className="relative flex-1">
-                <textarea 
-                  readOnly 
-                  value={logOutput}
-                  className="w-full h-full min-h-[150px] bg-[#0f1219] border border-slate-700 rounded-xl p-3 text-sm text-slate-300 focus:outline-none resize-none"
-                ></textarea>
-                {isGeneratingLog && (
-                  <div className="absolute inset-0 bg-[#0f1219]/80 rounded-xl flex items-center justify-center">
-                    <Loader2 className="w-6 h-6 text-blue-400 animate-spin" />
-                    <span className="ml-2 text-sm text-blue-400 font-bold">AI 正在整理歸納中...</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-            <div className="p-4 border-t border-slate-700/80 bg-[#1a1e29] flex justify-between items-center">
-              <span className="text-xs text-slate-500 flex items-center gap-1"><Zap className="w-3 h-3" /> Powered by Gemini API</span>
-              <div className="flex gap-2">
-                <button 
-                  onClick={saveWorkLog}
-                  disabled={!logOutput}
-                  className="bg-green-700 hover:bg-green-600 text-white font-bold py-1.5 px-4 rounded flex items-center gap-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Megaphone className="w-4 h-4" /> 儲存並同步
-                </button>
-                <button 
-                  onClick={copyToClipboard}
-                  className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-1.5 px-4 rounded flex items-center gap-2 text-sm transition-colors"
-                >
-                  {isCopied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-                  {isCopied ? <span className="text-green-400">已複製</span> : "複製內容"}
-                </button>
-              </div>
-            </div>
-
-            {/* Shared Logs History Section */}
-            <div className="p-5 border-t border-slate-700/50 bg-[#0f1219]">
-              <h4 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                即時同步紀錄 (Recent Shared Logs)
-              </h4>
-              <div className="space-y-3 max-h-[200px] overflow-y-auto pr-2">
-                {sharedLogs.map(log => (
-                  <div key={log.id} className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50 text-xs text-slate-300">
-                    <div className="text-[10px] text-slate-500 mb-1">{new Date(log.created_at).toLocaleString()}</div>
-                    <div className="whitespace-pre-wrap">{log.content}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
 
       {/* Modal 2: Knowledge QA */}
       <div className={`modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 ${activeModal === 'knowledge' ? 'active' : ''}`}>
