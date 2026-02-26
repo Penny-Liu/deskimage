@@ -98,6 +98,10 @@ try {
 try {
   db.prepare("ALTER TABLE disease_guidelines ADD COLUMN reference_cases TEXT").run();
 } catch (e) { /* Column likely exists */ }
+try {
+  // is_featured: stores the date (YYYY-MM-DD) when marked for today's sharing, or null
+  db.prepare("ALTER TABLE disease_guidelines ADD COLUMN is_featured TEXT DEFAULT NULL").run();
+} catch (e) { /* Column likely exists */ }
 
 
 // Seed default guidelines
@@ -326,6 +330,21 @@ async function startServer() {
     try {
       const rows = db.prepare("SELECT * FROM guideline_files WHERE guideline_id = ? ORDER BY created_at ASC").all(req.params.id);
       res.json(rows);
+    } catch (error) {
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  // 10b. Toggle Today's Featured Status
+  app.post("/api/guidelines/:id/feature", (req, res) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const row = db.prepare("SELECT is_featured FROM disease_guidelines WHERE id = ?").get(req.params.id) as any;
+      if (!row) return res.status(404).json({ error: "Not found" });
+      const alreadyFeatured = row.is_featured === today;
+      db.prepare("UPDATE disease_guidelines SET is_featured = ? WHERE id = ?")
+        .run(alreadyFeatured ? null : today, req.params.id);
+      res.json({ featured: !alreadyFeatured });
     } catch (error) {
       res.status(500).json({ error: "Database error" });
     }

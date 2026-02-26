@@ -142,9 +142,6 @@ export default function App() {
   const [presentationCase, setPresentationCase] = useState<any | null>(null);
   const [presentationFiles, setPresentationFiles] = useState<any[]>([]);
   const [presentationPage, setPresentationPage] = useState(0);
-  const [showArchiveDialog, setShowArchiveDialog] = useState(false);
-  const [archiveCategory, setArchiveCategory] = useState('');
-  const [archiveTitle, setArchiveTitle] = useState('');
 
   const startPresentation = async (gLine: any) => {
     const files = await fetch(`/api/guidelines/${gLine.id}/files`)
@@ -152,32 +149,13 @@ export default function App() {
     setPresentationCase(gLine);
     setPresentationFiles(files);
     setPresentationPage(0);
-    setShowArchiveDialog(false);
   };
 
-  const closePresentation = () => {
-    if (!presentationCase) return;
-    setShowArchiveDialog(true);
-    setArchiveTitle(presentationCase.title || '');
-    setArchiveCategory(presentationCase.category || '健檢常見疾病');
-  };
-
-  const archivePresentation = async () => {
-    if (!archiveTitle.trim()) { showToast('請填寫標題'); return; }
+  const toggleFeatured = async (g: any) => {
     try {
-      const formData = new FormData();
-      if (presentationCase?.id) formData.append('id', presentationCase.id);
-      formData.append('category', archiveCategory);
-      formData.append('title', archiveTitle);
-      formData.append('content', presentationCase?.content || '');
-      formData.append('keywords', presentationCase?.keywords || '');
-      formData.append('reference_cases', presentationCase?.reference_cases || '');
-      await fetch('/api/guidelines', { method: 'POST', body: formData });
-      showToast('已歸檔');
+      await fetch(`/api/guidelines/${g.id}/feature`, { method: 'POST' });
       fetchGuidelines();
-    } catch (e) { showToast('歸檔失敗'); }
-    setPresentationCase(null);
-    setShowArchiveDialog(false);
+    } catch (e) { showToast('連線失敗'); }
   };
 
   const devices = ['3T MR', '1.5T MR', 'CT', 'US1', 'US2', 'US3', 'US4', 'MG', 'BMD', 'DX'];
@@ -756,8 +734,28 @@ export default function App() {
                     <span className="text-[10px] bg-red-500/20 text-red-300 px-2 py-1 rounded border border-red-500/30 uppercase font-bold tracking-wider">Action required</span>
                   </div>
                   <div className="p-4">
-                    <h4 className="text-base font-bold text-white mb-1">儀器保養登記</h4>
-                    <p className="text-xs text-slate-400">目前有 {maintenanceHistory.filter((m: any) => m.type === 'fault' && m.status !== 'resolved').length} 項設備待修追蹤</p>
+                    <h4 className="text-base font-bold text-white mb-2">儀器保養登記</h4>
+                    {(() => {
+                      const pendingFaults = maintenanceHistory.filter((m: any) => m.type === 'fault' && m.status !== 'resolved');
+                      if (pendingFaults.length === 0) return <p className="text-xs text-slate-400">目前無待修設備</p>;
+                      // Deduplicate devices
+                      const devices = [...new Set(pendingFaults.map((m: any) => m.device as string))];
+                      return (
+                        <div className="space-y-1">
+                          {devices.map((dev: string) => {
+                            const faults = pendingFaults.filter((m: any) => m.device === dev);
+                            const isCritical = faults.some((m: any) => m.status === 'critical' || m.status === 'urgent');
+                            return (
+                              <div key={dev} className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full shrink-0 ${isCritical ? 'bg-red-500 animate-pulse' : 'bg-yellow-500'}`} />
+                                <span className="text-xs font-bold text-slate-200">{dev}</span>
+                                <span className="text-[10px] text-slate-500">({faults.length} 筆)</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </button>
 
@@ -803,28 +801,38 @@ export default function App() {
                   </div>
                 </a>
 
-                {/* Case Sharing Section */}
-                <div className="mt-3 bg-gradient-to-br from-violet-900/30 to-blue-900/30 rounded-xl border border-violet-700/50 overflow-hidden shrink-0">
-                  <div className="px-3 py-2 bg-violet-900/30 border-b border-violet-700/30 flex items-center gap-2">
-                    <span className="text-xs font-bold text-violet-300 tracking-wider">📺 案例分享</span>
-                  </div>
-                  <div className="p-3 space-y-1.5 max-h-44 overflow-y-auto">
-                    {guidelines.length === 0 && <p className="text-xs text-slate-500 text-center py-2">尚無指引案例</p>}
-                    {guidelines.slice(0, 8).map((g: any) => (
-                      <button
-                        key={g.id}
-                        onClick={() => startPresentation(g)}
-                        className="w-full text-left px-3 py-2 rounded-lg bg-slate-800/60 hover:bg-violet-800/40 border border-slate-700/50 hover:border-violet-600/50 transition-colors"
-                      >
-                        <p className="text-xs font-bold text-white truncate">{g.title}</p>
-                        <p className="text-[10px] text-slate-500">{g.category}</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
               </section>
             </div>
+
+            {/* Standalone Case Sharing Section */}
+            {(() => {
+              const today = new Date().toISOString().slice(0, 10);
+              const featured = guidelines.filter((g: any) => g.is_featured === today);
+              if (featured.length === 0) return null;
+              return (
+                <div className="mt-4 mx-0">
+                  <div className="bg-gradient-to-r from-violet-900/40 to-blue-900/30 rounded-2xl border border-violet-700/40 overflow-hidden">
+                    <div className="px-5 py-3 border-b border-violet-700/30 flex items-center gap-3">
+                      <span className="text-base font-bold text-violet-200">📺 今日案例分享</span>
+                      <span className="text-[10px] bg-violet-700/40 text-violet-300 px-2 py-0.5 rounded-full">{featured.length} 個</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {featured.map((g: any) => (
+                        <button
+                          key={g.id}
+                          onClick={() => startPresentation(g)}
+                          className="text-left p-3 rounded-xl bg-black/30 hover:bg-violet-900/40 border border-violet-700/30 hover:border-violet-500/60 transition-all group"
+                        >
+                          <p className="text-sm font-bold text-white truncate group-hover:text-violet-200">{g.title}</p>
+                          <p className="text-[10px] text-slate-500 mt-1">{g.category}</p>
+                          <p className="text-[10px] text-violet-400 mt-2">▶ 點擊全螢幕展示</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
           </main>
         </div>
@@ -833,7 +841,7 @@ export default function App() {
       {/* --- Modals --- */}
 
       {/* Fullscreen Presentation Modal */}
-      {presentationCase && !showArchiveDialog && (
+      {presentationCase && (
         <div className="fixed inset-0 z-[200] bg-black flex flex-col">
           <div className="flex items-center justify-between px-6 py-3 bg-black/80 border-b border-slate-800">
             <div>
@@ -848,7 +856,7 @@ export default function App() {
                   <button onClick={() => setPresentationPage(p => Math.min(presentationFiles.length-1, p+1))} disabled={presentationPage === presentationFiles.length-1} className="text-slate-400 hover:text-white disabled:opacity-30 px-3 py-1 rounded border border-slate-700">▶</button>
                 </div>
               )}
-              <button onClick={closePresentation} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold">結束分享 ✕</button>
+              <button onClick={() => setPresentationCase(null)} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold">結束分享 ✕</button>
             </div>
           </div>
           <div className="flex-1 overflow-auto flex items-center justify-center bg-black p-6">
@@ -861,33 +869,6 @@ export default function App() {
               if (file?.file_type === 'pdf' || file?.file_type === 'word_html') return <iframe src={file.file_url} title={file.original_name} className="w-full h-full bg-white rounded" />;
               return <div className="text-slate-400 text-lg">無法預覽此格式</div>;
             })()}
-          </div>
-        </div>
-      )}
-
-      {/* Archive on Close Dialog */}
-      {showArchiveDialog && (
-        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center">
-          <div className="bg-app-card border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
-            <h3 className="text-lg font-bold text-white mb-4">要歸檔此案例嗎？</h3>
-            <div className="space-y-3 mb-5">
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">分類</label>
-                <select value={archiveCategory} onChange={e => setArchiveCategory(e.target.value)} className="w-full bg-[#0f1219] border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500">
-                  <option value="健檢常見疾病">健檢常見疾病</option>
-                  <option value="操作指引">操作指引</option>
-                  <option value="其他">其他</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-slate-400 block mb-1">標題</label>
-                <input value={archiveTitle} onChange={e => setArchiveTitle(e.target.value)} className="w-full bg-[#0f1219] border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" />
-              </div>
-            </div>
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => { setPresentationCase(null); setShowArchiveDialog(false); }} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">不歸檔，直接關閉</button>
-              <button onClick={archivePresentation} className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-bold">確認歸檔</button>
-            </div>
           </div>
         </div>
       )}
@@ -1514,8 +1495,17 @@ export default function App() {
                           : 'bg-transparent border-transparent text-slate-400 hover:bg-slate-800 hover:text-slate-200'
                       }`}
                     >
-                      <div className="text-xs text-blue-400 font-bold mb-0.5">{g.category}</div>
-                      <div className="font-bold text-sm truncate">{g.title}</div>
+                      <div className="flex items-start justify-between gap-1">
+                        <div className="min-w-0">
+                          <div className="text-xs text-blue-400 font-bold mb-0.5">{g.category}</div>
+                          <div className="font-bold text-sm truncate">{g.title}</div>
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleFeatured(g); }}
+                          title={g.is_featured === new Date().toISOString().slice(0, 10) ? '取消今日分享' : '加入今日分享'}
+                          className={`shrink-0 text-lg leading-none transition-transform hover:scale-125 ${g.is_featured === new Date().toISOString().slice(0, 10) ? 'opacity-100' : 'opacity-25 hover:opacity-70'}`}
+                        >⭐</button>
+                      </div>
                     </button>
                   ))}
               </div>
