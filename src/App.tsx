@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import {
   Megaphone,
@@ -27,7 +27,7 @@ import {
 
 // Initialize Gemini API
 // Note: In a real app, ensure process.env.GEMINI_API_KEY is set
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || 'MISSING_API_KEY' });
 
 export default function App() {
   // --- State ---
@@ -39,6 +39,12 @@ export default function App() {
   // Modal States
   const [activeModal, setActiveModal] = useState<string | null>(null);
   
+  // Custom Toast State
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
 
   // Device Modal State
   const [activeDevice, setActiveDevice] = useState<string | null>(null);
@@ -104,9 +110,21 @@ export default function App() {
     const deviceName = deviceGuides[deviceKey]?.title || deviceKey;
     setQaHistory([{ role: 'ai', content: `您好！我是${deviceName}的專屬 AI 助理。請告訴我您想查詢的檢查項目或操作問題。` }]);
   };
+  
+  // Maintenance Form State
   const [maintenanceTab, setMaintenanceTab] = useState<'routine' | 'fault'>('routine');
   const [selectedDevice, setSelectedDevice] = useState('3T MR');
   const [maintenanceContent, setMaintenanceContent] = useState('');
+  
+  // Inline Resolution State
+  const [resolvingFaultId, setResolvingFaultId] = useState<number | null>(null);
+  const [resolveReporterName, setResolveReporterName] = useState<string>('');
+  
+  // Inline Update State
+  const [updatingFaultId, setUpdatingFaultId] = useState<number | null>(null);
+  const [updateContent, setUpdateContent] = useState<string>('');
+  const [updateReporter, setUpdateReporter] = useState<string>('');
+
   const [faultStatus, setFaultStatus] = useState('normal');
   const [reporterName, setReporterName] = useState('');
   const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
@@ -129,9 +147,11 @@ export default function App() {
     return 'normal';
   };
 
-  const resolveFault = async (id: number) => {
-    if (!confirm("確定此故障已排除？")) return;
-    const reporter = prompt("請輸入修復確認人姓名：");
+  const resolveFault = async (id: number, reporter: string) => {
+    if (!reporter.trim()) {
+      showToast("請輸入修復確認人姓名");
+      return;
+    }
     try {
       const res = await fetch(`/api/maintenance/${id}/resolve`, {
         method: 'POST',
@@ -140,7 +160,30 @@ export default function App() {
       });
       if (!res.ok) throw new Error("API Error");
       fetchMaintenanceLogs();
-    } catch (e) { alert("更新失敗"); }
+      showToast("狀態已更新為已修復");
+      setResolvingFaultId(null);
+      setResolveReporterName('');
+    } catch (e) { showToast("更新失敗"); }
+  };
+
+  const addFaultUpdate = async (id: number) => {
+    if (!updateContent.trim() || !updateReporter.trim()) {
+      showToast("請填寫進度內容與回報人");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/maintenance/${id}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: updateContent, reporter: updateReporter })
+      });
+      if (!res.ok) throw new Error("API Error");
+      fetchMaintenanceLogs();
+      showToast("已新增處理進度");
+      setUpdatingFaultId(null);
+      setUpdateContent('');
+      setUpdateReporter('');
+    } catch (e) { showToast("更新失敗"); }
   };
 
   const fetchGuidelines = async () => {
@@ -158,7 +201,7 @@ export default function App() {
 
   const saveGuideline = async () => {
     if (!editGuidelineData.title || !editGuidelineData.content) {
-      alert("標題與內容為必填");
+      showToast("標題與內容為必填");
       return;
     }
     try {
@@ -179,7 +222,7 @@ export default function App() {
         body: formData // Content-Type is set automatically
       });
       if (!res.ok) throw new Error("API Error");
-      alert("儲存成功");
+      showToast("儲存成功");
       setIsEditingGuideline(false);
       fetchGuidelines();
       // If we were editing, update the selected view
@@ -192,7 +235,7 @@ export default function App() {
         // So fetching guidelines is best.
         setSelectedGuideline(null); 
       }
-    } catch (e) { alert("儲存失敗"); }
+    } catch (e) { showToast("儲存失敗"); }
   };
 
   const fetchMaintenanceLogs = async () => {
@@ -206,9 +249,11 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  const submitMaintenance = async () => {
+  const submitMaintenance = async (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    
     if (!maintenanceContent || !reporterName) {
-      alert("請填寫內容與回報人");
+      showToast("請填寫內容與回報人");
       return;
     }
     
@@ -225,11 +270,11 @@ export default function App() {
         })
       });
       if (!res.ok) throw new Error("API Error");
-      alert("登記完成");
+      showToast("登記完成");
       setMaintenanceContent('');
       fetchMaintenanceLogs();
     } catch (e) {
-      alert("登記失敗");
+      showToast("登記失敗，請檢查網路狀態");
     }
   };
 
@@ -293,8 +338,9 @@ export default function App() {
       // Refresh immediately
       parseAnnouncements(text);
       setActiveModal(null);
+      showToast("公告已更新");
     } catch (error) {
-      alert("更新失敗");
+      showToast("更新公告失敗");
     }
   };
 
@@ -406,6 +452,14 @@ export default function App() {
   return (
     <div className="bg-slate-900 text-slate-200 h-screen w-full flex flex-col items-end p-4 md:p-6 lg:p-8 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-fixed relative">
       
+      {/* Toast Notification */}
+      <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] transition-all duration-300 ${toastMessage ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-10 pointer-events-none'}`}>
+        <div className="bg-blue-600 shadow-lg shadow-blue-900/50 text-white px-6 py-3 rounded-full font-bold flex items-center gap-3 text-sm md:text-base border border-blue-400">
+          <Check className="w-5 h-5" />
+          {toastMessage}
+        </div>
+      </div>
+
       {/* Main Container */}
       <div className="w-full lg:w-[70%] xl:w-[65%] max-w-7xl h-full flex flex-col gap-4">
         
@@ -418,24 +472,24 @@ export default function App() {
           <div className="marquee-container flex-1 h-full border-r border-slate-700/50 pr-4 md:pr-6 mr-4 md:mr-6">
             <div className="marquee-content items-center h-full">
               {isLoadingAnnouncements ? (
-                <div className="text-slate-500 text-sm flex items-center">
-                  <Loader className="w-4 h-4 mr-2 animate-spin" /> 載入中...
+                <div className="text-slate-500 text-lg flex items-center">
+                  <Loader className="w-5 h-5 mr-3 animate-spin" /> 載入中...
                 </div>
               ) : announcements.length === 0 ? (
-                <span className="text-slate-500 text-sm">目前無最新公告。</span>
+                <span className="text-slate-500 text-lg">目前無最新公告。</span>
               ) : (
                 announcements.map((item, index) => {
                   const isUrgent = item.includes('注意') || item.includes('警告') || item.includes('今日');
                   return isUrgent ? (
-                    <div key={index} className="flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/30 px-3 py-1.5 rounded-full shrink-0">
-                      <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div>
-                      <span className="text-xs font-bold text-yellow-500 tracking-wider">NEW</span>
-                      <span className="text-sm font-bold text-white">{item}</span>
+                    <div key={index} className="flex items-center gap-3 bg-yellow-500/10 border border-yellow-500/50 px-4 py-2 rounded-full shrink-0 shadow-lg shadow-yellow-500/10">
+                      <div className="w-3 h-3 rounded-full bg-yellow-400 animate-pulse"></div>
+                      <span className="text-sm font-black text-yellow-400 tracking-widest">🚨 NEW</span>
+                      <span className="text-xl font-bold text-white tracking-wide drop-shadow-md">{item}</span>
                     </div>
                   ) : (
-                    <div key={index} className="flex items-center gap-2 px-3 py-1.5 shrink-0">
-                      <div className="w-1.5 h-1.5 rounded-full bg-slate-500"></div>
-                      <span className="text-sm text-slate-300">{item}</span>
+                    <div key={index} className="flex items-center gap-3 px-4 py-2 shrink-0">
+                      <div className="w-2.5 h-2.5 rounded-full bg-slate-400"></div>
+                      <span className="text-lg font-medium text-slate-100">{item}</span>
                     </div>
                   );
                 })
@@ -473,8 +527,8 @@ export default function App() {
                 <Menu className="w-6 h-6" />
               </button>
               <div className={`flex-1 transition-opacity duration-200 ${!isSidebarExpanded ? 'opacity-0 hidden' : 'opacity-100'}`}>
-                <h1 className="text-white font-bold text-lg tracking-wide">RadPortal</h1>
-                <p className="text-[10px] text-slate-500">影像醫學部工作站</p>
+                <h1 className="text-white font-black text-2xl tracking-wide">RadPortal</h1>
+                <p className="text-sm text-slate-400 font-medium">影像醫學部工作站</p>
               </div>
             </div>
             
@@ -497,9 +551,9 @@ export default function App() {
             
             {/* Section: Daily Operations */}
             <section className="shrink-0" id="top-header">
-              <div className="flex items-baseline gap-3 mb-2">
-                <h3 className="text-lg font-bold text-white">Daily Operations</h3>
-                <p className="text-slate-400 text-xs hidden sm:block">標準作業流程與日常紀錄工具。</p>
+              <div className="flex items-baseline gap-3 mb-3">
+                <h3 className="text-2xl font-bold text-white tracking-wide">Daily Operations</h3>
+                <p className="text-slate-400 text-sm hidden sm:block">標準作業流程與日常紀錄工具。</p>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -511,25 +565,25 @@ export default function App() {
                   className="bg-app-card hover:bg-app-card-hover rounded-xl p-2.5 flex items-center gap-3 transition-all border border-transparent hover:border-blue-500/50 group text-left w-full relative overflow-hidden"
                 >
                   <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                  <div className="w-8 h-8 rounded-lg bg-slate-800/50 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform relative z-10">
-                    <ClipboardEdit className="w-4 h-4 text-yellow-400" />
+                  <div className="w-10 h-10 rounded-xl bg-slate-800/50 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform relative z-10">
+                    <ClipboardEdit className="w-5 h-5 text-yellow-400" />
                   </div>
-                  <h4 className="text-sm font-bold text-white relative z-10">工作日誌</h4>
+                  <h4 className="text-lg font-bold text-white relative z-10">工作日誌</h4>
                 </a>
                 
-                <a href="https://drive.google.com/drive/folders/1jvhBzhLEmrlerGmTlCSohnrSl5t8hwW9" target="_blank" rel="noreferrer" id="card-db" className="bg-app-card hover:bg-app-card-hover rounded-xl p-2.5 flex items-center gap-3 transition-all border border-transparent hover:border-slate-600 group">
-                  <div className="w-8 h-8 rounded-lg bg-slate-800/50 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                    <Disc3 className="w-4 h-4 text-yellow-400" />
+                <a href="https://drive.google.com/drive/folders/1jvhBzhLEmrlerGmTlCSohnrSl5t8hwW9" target="_blank" rel="noreferrer" id="card-db" className="bg-app-card hover:bg-app-card-hover rounded-xl p-3 md:p-4 flex items-center gap-4 transition-all border border-transparent hover:border-slate-600 group">
+                  <div className="w-10 h-10 rounded-xl bg-slate-800/50 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                    <Disc3 className="w-5 h-5 text-yellow-400" />
                   </div>
-                  <h4 className="text-sm font-bold text-white">光碟燒錄</h4>
+                  <h4 className="text-lg font-bold text-white">光碟燒錄</h4>
                 </a>
                 
-                <div className="bg-app-card rounded-xl p-2.5 flex flex-col gap-2 border border-transparent hover:border-slate-600 transition-all group relative overflow-hidden">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-6 h-6 rounded-lg bg-slate-800/50 flex items-center justify-center shrink-0">
-                      <PackageSearch className="w-3 h-3 text-yellow-400" />
+                <div className="bg-app-card rounded-xl p-3 md:p-4 flex flex-col gap-3 border border-transparent hover:border-slate-600 transition-all group relative overflow-hidden">
+                  <div className="flex items-center gap-3 mb-1">
+                    <div className="w-8 h-8 rounded-xl bg-slate-800/50 flex items-center justify-center shrink-0">
+                      <PackageSearch className="w-4 h-4 text-yellow-400" />
                     </div>
-                    <h4 className="text-sm font-bold text-white">衛耗材管理</h4>
+                    <h4 className="text-lg font-bold text-white">衛耗材管理</h4>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-2">
@@ -560,8 +614,8 @@ export default function App() {
                 </div>
 
                 <div className="flex items-baseline gap-3 mb-3 shrink-0 relative z-10">
-                  <h3 className="text-base font-bold text-white">Professional Knowledge</h3>
-                  <p className="text-slate-400 text-[11px] hidden sm:block">檢查指引與儀器操作手冊。</p>
+                  <h3 className="text-xl font-bold text-white tracking-wide">Professional Knowledge</h3>
+                  <p className="text-slate-400 text-xs hidden sm:block">檢查指引與儀器操作手冊。</p>
                 </div>
                 
                 <div className="flex flex-col gap-2 mb-3 shrink-0 relative z-10">
@@ -573,72 +627,72 @@ export default function App() {
                     className="w-full flex items-center justify-between p-2.5 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 border border-slate-700 transition-all group cursor-pointer"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-blue-900/30 rounded-md text-blue-400">
-                        <Stethoscope className="w-4 h-4" />
+                      <div className="p-2 bg-blue-900/30 rounded-lg text-blue-400">
+                        <Stethoscope className="w-5 h-5" />
                       </div>
                       <div className="text-left">
-                        <span className="block text-sm font-bold text-white">健檢常見疾病指引</span>
+                        <span className="block text-base font-bold text-white">健檢常見疾病指引</span>
                       </div>
                     </div>
-                    <ExternalLink className="text-slate-500 w-4 h-4 group-hover:text-blue-400 transition-all" />
+                    <ExternalLink className="text-slate-500 w-5 h-5 group-hover:text-blue-400 transition-all" />
                   </a>
 
-                  <button onClick={() => setActiveModal('knowledge')} className="w-full flex items-center justify-between p-2.5 rounded-lg bg-gradient-to-r from-slate-800/80 to-slate-800/40 hover:from-amber-900/40 hover:to-slate-800/40 border border-slate-700 hover:border-amber-500/50 transition-all group">
+                  <button onClick={() => setActiveModal('knowledge')} className="w-full flex items-center justify-between p-3 rounded-lg bg-gradient-to-r from-slate-800/80 to-slate-800/40 hover:from-amber-900/40 hover:to-slate-800/40 border border-slate-700 hover:border-amber-500/50 transition-all group">
                     <div className="flex items-center gap-3">
-                      <div className="p-1.5 bg-amber-500/20 rounded-md text-amber-400">
-                        <Sparkles className="w-4 h-4" />
+                      <div className="p-2 bg-amber-500/20 rounded-lg text-amber-400">
+                        <Sparkles className="w-5 h-5" />
                       </div>
                       <div className="text-left">
-                        <span className="block text-sm font-bold text-amber-50">✨ 健檢常見疾病 AI 指引</span>
+                        <span className="block text-base font-bold text-amber-50">✨ 健檢常見疾病 AI 指引</span>
                       </div>
                     </div>
-                    <ArrowRight className="text-slate-500 w-4 h-4 group-hover:translate-x-1 group-hover:text-amber-400 transition-all" />
+                    <ArrowRight className="text-slate-500 w-5 h-5 group-hover:translate-x-1 group-hover:text-amber-400 transition-all" />
                   </button>
                 </div>
 
-                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 mt-2 relative z-10 flex items-center gap-1.5">
-                  <FileText className="w-3 h-3" /> Equipment Manuals (SOP)
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 mt-4 relative z-10 flex items-center gap-2">
+                  <FileText className="w-4 h-4" /> Equipment Manuals (SOP)
                 </h4>
                 
                 <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 shrink-0 relative z-10">
-                  <SopButton label="MR" subLabel="磁振造影" onClick={() => openDeviceModal('MR')} />
-                  <SopButton label="US" subLabel="超音波" onClick={() => openDeviceModal('US')} />
-                  <SopButton label="CT" subLabel="電腦斷層" onClick={() => openDeviceModal('CT')} />
-                  <SopButton label="X光" subLabel="一般攝影" onClick={() => openDeviceModal('X-Ray')} />
-                  <SopButton label="骨密" subLabel="DXA" onClick={() => openDeviceModal('BMD')} />
-                  <SopButton label="乳房" subLabel="攝影" onClick={() => openDeviceModal('MG')} />
+                  <SopButton label="MR" subLabel="磁振造影" onClick={() => openDeviceModal('MR')} status={['3T MR', '1.5T MR'].map(getDeviceStatus).some(s => s === 'critical' || s === 'urgent') ? 'critical' : ['3T MR', '1.5T MR'].map(getDeviceStatus).some(s => s === 'warning') ? 'warning' : 'normal'} />
+                  <SopButton label="US" subLabel="超音波" onClick={() => openDeviceModal('US')} status={['US1', 'US2', 'US3', 'US4'].map(getDeviceStatus).some(s => s === 'critical' || s === 'urgent') ? 'critical' : ['US1', 'US2', 'US3', 'US4'].map(getDeviceStatus).some(s => s === 'warning') ? 'warning' : 'normal'} />
+                  <SopButton label="CT" subLabel="電腦斷層" onClick={() => openDeviceModal('CT')} status={['CT'].map(getDeviceStatus).some(s => s === 'critical' || s === 'urgent') ? 'critical' : ['CT'].map(getDeviceStatus).some(s => s === 'warning') ? 'warning' : 'normal'} />
+                  <SopButton label="X光" subLabel="一般攝影" onClick={() => openDeviceModal('X-Ray')} status={['DX'].map(getDeviceStatus).some(s => s === 'critical' || s === 'urgent') ? 'critical' : ['DX'].map(getDeviceStatus).some(s => s === 'warning') ? 'warning' : 'normal'} />
+                  <SopButton label="骨密" subLabel="DXA" onClick={() => openDeviceModal('BMD')} status={['BMD'].map(getDeviceStatus).some(s => s === 'critical' || s === 'urgent') ? 'critical' : ['BMD'].map(getDeviceStatus).some(s => s === 'warning') ? 'warning' : 'normal'} />
+                  <SopButton label="乳房" subLabel="攝影" onClick={() => openDeviceModal('MG')} status={['MG'].map(getDeviceStatus).some(s => s === 'critical' || s === 'urgent') ? 'critical' : ['MG'].map(getDeviceStatus).some(s => s === 'warning') ? 'warning' : 'normal'} />
                 </div>
               </section>
 
               {/* Right: Status */}
-              <section className="xl:col-span-5 bg-app-card rounded-xl p-4 border border-slate-800 shadow-lg flex flex-col">
-                <h3 className="text-base font-bold text-white mb-3 shrink-0">System & Status</h3>
+              <section className="xl:col-span-5 bg-app-card rounded-xl p-4 md:p-5 border border-slate-800 shadow-lg flex flex-col">
+                <h3 className="text-xl font-bold text-white mb-4 shrink-0 tracking-wide">System & Status</h3>
                 
                 <button 
                   onClick={() => setActiveModal('maintenance')}
                   id="card-mt" 
-                  className="block w-full text-left bg-[#1a1e29] rounded-lg border border-red-900/50 mb-2 overflow-hidden group hover:border-red-500/50 transition-colors shrink-0"
+                  className="block w-full text-left bg-[#1a1e29] rounded-xl border border-red-900/50 mb-3 overflow-hidden group hover:border-red-500/50 transition-colors shrink-0"
                 >
-                  <div className="bg-red-900/20 px-2.5 py-1 border-b border-red-900/50 flex justify-between items-center">
-                    <span className="text-[10px] font-bold text-red-400 flex items-center gap-1.5">
-                      <AlertTriangle className="w-3 h-3" /> FAULT / REPAIR
+                  <div className="bg-red-900/20 px-3 py-2 border-b border-red-900/50 flex justify-between items-center">
+                    <span className="text-xs font-bold text-red-400 flex items-center gap-2 tracking-wider">
+                      <AlertTriangle className="w-4 h-4" /> FAULT / REPAIR
                     </span>
-                    <span className="text-[9px] bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded border border-red-500/30">Action</span>
+                    <span className="text-[10px] bg-red-500/20 text-red-300 px-2 py-1 rounded border border-red-500/30 uppercase font-bold tracking-wider">Action required</span>
                   </div>
-                  <div className="p-2.5">
-                    <h4 className="text-sm font-bold text-white mb-0.5">儀器保養登記</h4>
-                    <p className="text-[11px] text-slate-400">目前有 {maintenanceHistory.filter((m: any) => m.type === 'fault' && m.status !== 'resolved').length} 項設備待修追蹤</p>
+                  <div className="p-4">
+                    <h4 className="text-base font-bold text-white mb-1">儀器保養登記</h4>
+                    <p className="text-xs text-slate-400">目前有 {maintenanceHistory.filter((m: any) => m.type === 'fault' && m.status !== 'resolved').length} 項設備待修追蹤</p>
                   </div>
                 </button>
 
-                <a href="https://penny-liu.github.io/schedule/" target="_blank" rel="noreferrer" id="card-sc" className="block bg-[#1a1e29] rounded-lg border border-slate-700 hover:border-slate-500 transition-colors shrink-0 mt-auto">
-                  <div className="p-2.5 flex items-center gap-3">
-                    <div className="p-2 bg-slate-800 rounded-md text-slate-300">
-                      <CalendarCheck2 className="w-4 h-4" />
+                <a href="https://penny-liu.github.io/schedule/" target="_blank" rel="noreferrer" id="card-sc" className="block w-full bg-[#1a1e29] rounded-xl border border-slate-700 hover:border-slate-500 transition-colors shrink-0 mt-auto">
+                  <div className="p-4 flex items-center gap-4">
+                    <div className="p-2.5 bg-slate-800 rounded-lg text-white">
+                      <CalendarCheck2 className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-white mb-0.5">排班系統</h4>
-                      <p className="text-[11px] text-slate-400">班表查看與休假申請</p>
+                      <h4 className="text-base font-bold text-white mb-1">排班系統</h4>
+                      <p className="text-xs text-slate-400">班表查看與休假申請</p>
                     </div>
                   </div>
                 </a>
@@ -882,6 +936,7 @@ export default function App() {
               </div>
 
               <button 
+                type="button"
                 onClick={submitMaintenance}
                 className={`mt-auto w-full py-2.5 rounded-lg font-bold text-white transition-colors flex items-center justify-center gap-2 ${maintenanceTab === 'routine' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-red-600 hover:bg-red-500'}`}
               >
@@ -921,16 +976,118 @@ export default function App() {
                         </div>
                         <span className="text-[10px] text-slate-500">{new Date(log.created_at).toLocaleString()}</span>
                       </div>
+                      
                       <p className="text-slate-300 mb-2 whitespace-pre-wrap">{log.content}</p>
-                      <div className="flex justify-between items-center text-[11px] text-slate-500 border-t border-slate-700/30 pt-2">
-                        <span>登記人: {log.reporter}</span>
-                        {log.type === 'fault' && log.status !== 'resolved' && (
-                          <button 
-                            onClick={() => resolveFault(log.id)}
-                            className="text-green-400 hover:text-green-300 flex items-center gap-1 font-bold bg-green-900/20 px-2 py-0.5 rounded border border-green-900/50 hover:bg-green-900/40"
-                          >
-                            <Check className="w-3 h-3" /> 標示為已修復
-                          </button>
+                      
+                      {/* Updates Timeline */}
+                      {log.updates && JSON.parse(log.updates || '[]').length > 0 && (
+                        <div className="mb-3 pl-3 border-l-2 border-slate-700 space-y-2 mt-2">
+                          {JSON.parse(log.updates).map((upd: any, idx: number) => (
+                            <div key={idx} className="bg-[#1a1e29] p-2 rounded text-xs border border-slate-800">
+                              <p className="text-slate-300 whitespace-pre-wrap">{upd.content}</p>
+                              <div className="flex justify-between items-center mt-1 text-[10px] text-slate-500">
+                                <span>回報: {upd.reporter}</span>
+                                <span>{new Date(upd.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex flex-col gap-2 text-[11px] text-slate-500 border-t border-slate-700/30 pt-2 relative">
+                        <div className="flex justify-between items-center w-full">
+                          <span>登記人: {log.reporter}</span>
+                          
+                          {log.type === 'fault' && log.status !== 'resolved' && (
+                            <div className="flex items-center gap-2">
+                              {/* Add Update Button */}
+                              {updatingFaultId !== log.id && resolvingFaultId !== log.id && (
+                                <button 
+                                  onClick={() => setUpdatingFaultId(log.id)}
+                                  className="text-blue-400 hover:text-blue-300 font-bold bg-blue-900/20 px-2 py-0.5 rounded border border-blue-900/50 hover:bg-blue-900/40"
+                                >
+                                  + 新增處理進度
+                                </button>
+                              )}
+                              
+                              {/* Resolve Action Trigger */}
+                              {resolvingFaultId !== log.id && updatingFaultId !== log.id && (
+                                <button 
+                                  onClick={() => setResolvingFaultId(log.id)}
+                                  className="text-green-400 hover:text-green-300 flex items-center gap-1 font-bold bg-green-900/20 px-2 py-0.5 rounded border border-green-900/50 hover:bg-green-900/40"
+                                >
+                                  <Check className="w-3 h-3" /> 標示為已修復
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Resolve Inline Form */}
+                        {resolvingFaultId === log.id && (
+                          <div className="flex items-center gap-2 mt-1 bg-green-900/10 p-2 rounded border border-green-900/30 w-full justify-between">
+                            <span className="font-bold text-green-500">修復確認</span>
+                            <div className="flex items-center gap-2">
+                              <input 
+                                type="text"
+                                value={resolveReporterName}
+                                onChange={(e) => setResolveReporterName(e.target.value)}
+                                placeholder="確認人姓名"
+                                className="bg-[#0f1219] border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-green-500 w-24"
+                                autoFocus
+                              />
+                              <button 
+                                onClick={() => resolveFault(log.id, resolveReporterName)}
+                                className="text-white bg-green-600 hover:bg-green-500 px-3 py-1 rounded font-bold"
+                              >
+                                送出
+                              </button>
+                              <button 
+                                onClick={() => { setResolvingFaultId(null); setResolveReporterName(''); }}
+                                className="text-slate-400 hover:text-white px-2 py-1"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Update Inline Form */}
+                        {updatingFaultId === log.id && (
+                          <div className="flex flex-col gap-2 mt-1 bg-blue-900/10 p-2 rounded border border-blue-900/30 w-full">
+                            <span className="font-bold text-blue-400 mb-1">新增進度紀錄</span>
+                            <textarea
+                              value={updateContent}
+                              onChange={(e) => setUpdateContent(e.target.value)}
+                              placeholder="處理情形 (e.g. 已聯絡報修，等待零件...)"
+                              className="w-full bg-[#0f1219] border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-blue-500 resize-none text-xs"
+                              rows={2}
+                              autoFocus
+                            />
+                            <div className="flex justify-between items-center mt-1">
+                              <input 
+                                type="text"
+                                value={updateReporter}
+                                onChange={(e) => setUpdateReporter(e.target.value)}
+                                placeholder="填寫人姓名"
+                                className="bg-[#0f1219] border border-slate-700 rounded px-2 py-1 text-slate-200 w-28 text-xs focus:outline-none focus:border-blue-500"
+                              />
+                              <div className="flex gap-2">
+                                <button 
+                                  onClick={() => { setUpdatingFaultId(null); setUpdateContent(''); setUpdateReporter(''); }}
+                                  className="text-slate-400 hover:text-white px-3 py-1"
+                                >
+                                  取消
+                                </button>
+                                <button 
+                                  onClick={() => addFaultUpdate(log.id)}
+                                  className="text-white bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded font-bold"
+                                >
+                                  儲存進度
+                                </button>
+                              </div>
+                            </div>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -1345,22 +1502,31 @@ function SidebarItem({ icon, label, target, expanded, active }: { icon: string, 
       } ${!expanded ? 'justify-center px-0' : ''}`}
       title={!expanded ? label : ''}
     >
-      <div className={`w-8 shrink-0 flex justify-center text-xs font-bold transition-colors ${expanded ? 'mr-3' : 'mr-0'}`}>
+      <div className={`w-8 shrink-0 flex justify-center transition-colors ${expanded ? 'mr-4' : 'mr-0'}`}>
         {icon}
       </div>
-      <span className={`font-medium whitespace-nowrap transition-opacity duration-200 ${!expanded ? 'opacity-0 hidden' : 'opacity-100'}`}>
+      <span className={`font-bold text-base whitespace-nowrap transition-opacity duration-200 ${!expanded ? 'opacity-0 hidden' : 'opacity-100'}`}>
         {label}
       </span>
     </a>
   );
 }
 
-function SopButton({ label, subLabel, onClick }: { label: string, subLabel: string, onClick: () => void }) {
+function SopButton({ label, subLabel, onClick, status = 'normal' }: { label: string, subLabel: string, onClick: () => void, status?: string }) {
   return (
     <button 
       onClick={onClick} 
-      className="flex flex-col items-center justify-center bg-slate-800/80 hover:bg-amber-900/40 border border-slate-700/80 hover:border-amber-500/50 rounded-lg py-2 transition-colors w-full shadow-sm"
+      className={`flex flex-col items-center justify-center rounded-lg py-2 transition-colors w-full shadow-sm border relative overflow-hidden ${
+        status === 'critical' || status === 'urgent' ? 'bg-red-900/30 hover:bg-red-900/50 border-red-500/50' :
+        status === 'warning' ? 'bg-yellow-900/20 hover:bg-yellow-900/40 border-yellow-500/50' :
+        'bg-slate-800/80 hover:bg-amber-900/40 border-slate-700/80 hover:border-amber-500/50'
+      }`}
     >
+      {status !== 'normal' && (
+        <div className={`absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full ${
+          status === 'critical' || status === 'urgent' ? 'bg-red-500 animate-pulse' : 'bg-yellow-500'
+        }`}></div>
+      )}
       <span className="font-mono text-sm font-bold text-slate-100">{label}</span>
       {subLabel !== label && <span className="text-[10px] font-bold text-slate-100 text-center leading-tight">{subLabel}</span>}
     </button>

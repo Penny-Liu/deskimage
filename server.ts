@@ -59,6 +59,17 @@ db.exec(`
   );
 `);
 
+try {
+  // Add 'updates' column for maintenance history if it doesn't exist
+  // It stores a JSON string array of { timestamp, content, reporter }
+  db.exec(`ALTER TABLE maintenance_logs ADD COLUMN updates TEXT DEFAULT '[]'`);
+} catch (err: any) {
+  // Ignore error if column already exists (sqlite error: duplicate column name)
+  if (!err.message.includes('duplicate column name')) {
+    console.warn("Could not add updates column:", err);
+  }
+}
+
 // Migration: Add new columns if they don't exist (for existing DBs)
 try {
   db.prepare("ALTER TABLE disease_guidelines ADD COLUMN image_url TEXT").run();
@@ -99,7 +110,7 @@ if (!initSettings) {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = 3001;
 
   app.use(express.json());
   app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -168,7 +179,7 @@ async function startServer() {
   app.post("/api/maintenance", (req, res) => {
     try {
       const { type, device, content, status, reporter } = req.body;
-      const info = db.prepare("INSERT INTO maintenance_logs (type, device, content, status, reporter) VALUES (?, ?, ?, ?, ?)").run(type, device, content, status, reporter);
+      const info = db.prepare("INSERT INTO maintenance_logs (type, device, content, status, reporter, updates) VALUES (?, ?, ?, ?, ?, '[]')").run(type, device, content, status, reporter);
       res.json({ id: info.lastInsertRowid, success: true });
     } catch (error) {
       res.status(500).json({ error: "Database error" });
@@ -180,9 +191,44 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { reporter } = req.body;
-      db.prepare("UPDATE maintenance_logs SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP, content = content || '\n[修復紀錄] ' || ? WHERE id = ?").run(reporter ? `由 ${reporter} 回報修復` : '已修復', id);
+      db.prepare("UPDATE maintenance_logs SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP, reporter = ? WHERE id = ?").run(reporter, id);
       res.json({ success: true });
     } catch (error) {
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  // 8. Add Maintenance Progress Update
+  app.post("/api/maintenance/:id/update", (req, res) => {
+    try {
+      const { content, reporter } = req.body;
+      if (!content || !reporter) return res.status(400).json({ error: "Content and reporter required" });
+      
+      const log = db.prepare("SELECT updates FROM maintenance_logs WHERE id = ?").get(req.params.id) as any;
+      if (!log) return res.status(404).json({ error: "Record not found" });
+
+      let parsedUpdates: any[] = [];
+      try {
+        parsedUpdates = JSON.parse(log.updates || '[]');
+      } catch (e) {
+        parsedUpdates = [];
+      }
+
+      parsedUpdates.push({
+        timestamp: new Date().toISOString(),
+        content,
+        reporter
+      });
+
+      db.prepare(`
+        UPDATE maintenance_logs 
+        SET updates = ? 
+        WHERE id = ?
+      `).run(JSON.stringify(parsedUpdates), req.params.id);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error(error);
       res.status(500).json({ error: "Database error" });
     }
   });
