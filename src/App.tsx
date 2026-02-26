@@ -32,7 +32,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || 'MISSING_API_
 
 export default function App() {
   // --- State ---
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(true);
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [announcements, setAnnouncements] = useState<string[]>([]);
   const [isLoadingAnnouncements, setIsLoadingAnnouncements] = useState(true);
