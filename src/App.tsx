@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
+import * as XLSX from 'xlsx';
 import {
   Megaphone,
   Loader,
@@ -132,9 +133,52 @@ export default function App() {
   // Guidelines State
   const [guidelines, setGuidelines] = useState<any[]>([]);
   const [selectedGuideline, setSelectedGuideline] = useState<any | null>(null);
+  const [guidelineFiles, setGuidelineFiles] = useState<any[]>([]);
   const [guidelineSearch, setGuidelineSearch] = useState('');
   const [isEditingGuideline, setIsEditingGuideline] = useState(false);
   const [editGuidelineData, setEditGuidelineData] = useState({ category: '', title: '', content: '', keywords: '' });
+
+  // Case Sharing / Presentation State
+  const [presentationCase, setPresentationCase] = useState<any | null>(null);
+  const [presentationFiles, setPresentationFiles] = useState<any[]>([]);
+  const [presentationPage, setPresentationPage] = useState(0);
+  const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [archiveCategory, setArchiveCategory] = useState('');
+  const [archiveTitle, setArchiveTitle] = useState('');
+
+  const startPresentation = async (gLine: any) => {
+    const files = await fetch(`/api/guidelines/${gLine.id}/files`)
+      .then(r => r.ok ? r.json() : []).catch(() => []);
+    setPresentationCase(gLine);
+    setPresentationFiles(files);
+    setPresentationPage(0);
+    setShowArchiveDialog(false);
+  };
+
+  const closePresentation = () => {
+    if (!presentationCase) return;
+    setShowArchiveDialog(true);
+    setArchiveTitle(presentationCase.title || '');
+    setArchiveCategory(presentationCase.category || '健檢常見疾病');
+  };
+
+  const archivePresentation = async () => {
+    if (!archiveTitle.trim()) { showToast('請填寫標題'); return; }
+    try {
+      const formData = new FormData();
+      if (presentationCase?.id) formData.append('id', presentationCase.id);
+      formData.append('category', archiveCategory);
+      formData.append('title', archiveTitle);
+      formData.append('content', presentationCase?.content || '');
+      formData.append('keywords', presentationCase?.keywords || '');
+      formData.append('reference_cases', presentationCase?.reference_cases || '');
+      await fetch('/api/guidelines', { method: 'POST', body: formData });
+      showToast('已歸檔');
+      fetchGuidelines();
+    } catch (e) { showToast('歸檔失敗'); }
+    setPresentationCase(null);
+    setShowArchiveDialog(false);
+  };
 
   const devices = ['3T MR', '1.5T MR', 'CT', 'US1', 'US2', 'US3', 'US4', 'MG', 'BMD', 'DX'];
 
@@ -213,28 +257,21 @@ export default function App() {
       formData.append('keywords', editGuidelineData.keywords);
       formData.append('reference_cases', (editGuidelineData as any).reference_cases || '');
       
-      if ((editGuidelineData as any).image) {
-        formData.append('image', (editGuidelineData as any).image);
+      // Append multiple files
+      const fileInputEl = document.getElementById('guideline-file-input') as HTMLInputElement;
+      if (fileInputEl?.files) {
+        Array.from(fileInputEl.files).forEach(f => formData.append('files', f));
       }
 
       const res = await fetch('/api/guidelines', {
         method: 'POST',
-        body: formData // Content-Type is set automatically
+        body: formData
       });
       if (!res.ok) throw new Error("API Error");
       showToast("儲存成功");
       setIsEditingGuideline(false);
       fetchGuidelines();
-      // If we were editing, update the selected view
-      if ((editGuidelineData as any).id) {
-        // We need to re-fetch or update local state properly. 
-        // For simplicity, we'll let fetchGuidelines update the list, 
-        // but we might lose the selected view if we don't handle it.
-        // Let's just close the edit mode and let user re-select or find it.
-        // Actually, let's try to keep it selected if possible, but we need the new image URL.
-        // So fetching guidelines is best.
-        setSelectedGuideline(null); 
-      }
+      setSelectedGuideline(null);
     } catch (e) { showToast("儲存失敗"); }
   };
 
@@ -247,6 +284,33 @@ export default function App() {
         setMaintenanceHistory(data);
       }
     } catch (e) { console.error(e); }
+  };
+
+  const exportMaintenance = () => {
+    const rows = maintenanceHistory.map((log: any) => {
+      let updatesText = '';
+      try {
+        const updates = JSON.parse(log.updates || '[]');
+        updatesText = updates.map((u: any) =>
+          `[${new Date(u.timestamp).toLocaleString()}] ${u.content} (${u.reporter})`
+        ).join('\n');
+      } catch (e) { updatesText = ''; }
+      return {
+        '日期': new Date(log.created_at).toLocaleString(),
+        '儀器': log.device,
+        '類型': log.type === 'fault' ? '故障' : '保養',
+        '狀態': log.status === 'resolved' ? '已修復' : log.status === 'critical' ? '停機' : log.status === 'urgent' ? '緊急' : log.status === 'normal' ? '一般' : '完成',
+        '內容': log.content,
+        '登記人': log.reporter,
+        '處理進度歷程': updatesText,
+        '修復時間': log.resolved_at ? new Date(log.resolved_at).toLocaleString() : '',
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [18, 10, 6, 8, 40, 8, 50, 18].map(w => ({ wch: w }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '保養與故障紀錄');
+    XLSX.writeFile(wb, `maintenance_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   const submitMaintenance = async (e?: React.MouseEvent) => {
@@ -345,6 +409,18 @@ export default function App() {
   };
 
   const [activeSection, setActiveSection] = useState('top-header');
+
+  // Fetch guideline files when a guideline is selected
+  useEffect(() => {
+    if (!selectedGuideline?.id) {
+      setGuidelineFiles([]);
+      return;
+    }
+    fetch(`/api/guidelines/${selectedGuideline.id}/files`)
+      .then(r => r.ok ? r.json() : [])
+      .then(setGuidelineFiles)
+      .catch(() => setGuidelineFiles([]));
+  }, [selectedGuideline?.id]);
 
   // Scroll Spy
   useEffect(() => {
@@ -685,6 +761,36 @@ export default function App() {
                   </div>
                 </button>
 
+                {/* Today's Routine Maintenance Summary */}
+                {(() => {
+                  const today = new Date().toDateString();
+                  const todayLogs = maintenanceHistory.filter((m: any) => new Date(m.created_at).toDateString() === today && m.type === 'routine');
+                  const activeFaults = maintenanceHistory.filter((m: any) => m.type === 'fault' && m.status !== 'resolved');
+                  if (todayLogs.length === 0 && activeFaults.length === 0) return null;
+                  return (todayLogs.length > 0 && (
+                    <button
+                      onClick={() => setActiveModal('maintenance')}
+                      className="block w-full text-left bg-[#1a1e29] rounded-xl border border-blue-900/50 mb-3 overflow-hidden hover:border-blue-500/50 transition-colors shrink-0"
+                    >
+                      <div className="bg-blue-900/20 px-3 py-2 border-b border-blue-900/50 flex justify-between items-center">
+                        <span className="text-xs font-bold text-blue-400 flex items-center gap-2 tracking-wider">
+                          <CalendarCheck2 className="w-4 h-4" /> 今日保養
+                        </span>
+                        <span className="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-1 rounded border border-blue-500/30 uppercase font-bold">{todayLogs.length} 筆</span>
+                      </div>
+                      <div className="p-3 space-y-1">
+                        {todayLogs.slice(0, 3).map((log: any) => (
+                          <div key={log.id} className="flex items-center justify-between text-xs">
+                            <span className="text-slate-300">{log.device}</span>
+                            <span className="text-slate-500">{log.reporter}</span>
+                          </div>
+                        ))}
+                        {todayLogs.length > 3 && <p className="text-[10px] text-slate-500 text-right">...等 {todayLogs.length} 筆</p>}
+                      </div>
+                    </button>
+                  ));
+                })()}
+
                 <a href="https://penny-liu.github.io/schedule/" target="_blank" rel="noreferrer" id="card-sc" className="block w-full bg-[#1a1e29] rounded-xl border border-slate-700 hover:border-slate-500 transition-colors shrink-0 mt-auto">
                   <div className="p-4 flex items-center gap-4">
                     <div className="p-2.5 bg-slate-800 rounded-lg text-white">
@@ -696,6 +802,27 @@ export default function App() {
                     </div>
                   </div>
                 </a>
+
+                {/* Case Sharing Section */}
+                <div className="mt-3 bg-gradient-to-br from-violet-900/30 to-blue-900/30 rounded-xl border border-violet-700/50 overflow-hidden shrink-0">
+                  <div className="px-3 py-2 bg-violet-900/30 border-b border-violet-700/30 flex items-center gap-2">
+                    <span className="text-xs font-bold text-violet-300 tracking-wider">📺 案例分享</span>
+                  </div>
+                  <div className="p-3 space-y-1.5 max-h-44 overflow-y-auto">
+                    {guidelines.length === 0 && <p className="text-xs text-slate-500 text-center py-2">尚無指引案例</p>}
+                    {guidelines.slice(0, 8).map((g: any) => (
+                      <button
+                        key={g.id}
+                        onClick={() => startPresentation(g)}
+                        className="w-full text-left px-3 py-2 rounded-lg bg-slate-800/60 hover:bg-violet-800/40 border border-slate-700/50 hover:border-violet-600/50 transition-colors"
+                      >
+                        <p className="text-xs font-bold text-white truncate">{g.title}</p>
+                        <p className="text-[10px] text-slate-500">{g.category}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
               </section>
             </div>
 
@@ -704,6 +831,66 @@ export default function App() {
       </div>
 
       {/* --- Modals --- */}
+
+      {/* Fullscreen Presentation Modal */}
+      {presentationCase && !showArchiveDialog && (
+        <div className="fixed inset-0 z-[200] bg-black flex flex-col">
+          <div className="flex items-center justify-between px-6 py-3 bg-black/80 border-b border-slate-800">
+            <div>
+              <p className="text-xs text-slate-400">{presentationCase.category}</p>
+              <h2 className="text-xl font-bold text-white">{presentationCase.title}</h2>
+            </div>
+            <div className="flex items-center gap-3">
+              {presentationFiles.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setPresentationPage(p => Math.max(0, p-1))} disabled={presentationPage === 0} className="text-slate-400 hover:text-white disabled:opacity-30 px-3 py-1 rounded border border-slate-700">◀</button>
+                  <span className="text-sm text-slate-400">{presentationPage+1} / {presentationFiles.length}</span>
+                  <button onClick={() => setPresentationPage(p => Math.min(presentationFiles.length-1, p+1))} disabled={presentationPage === presentationFiles.length-1} className="text-slate-400 hover:text-white disabled:opacity-30 px-3 py-1 rounded border border-slate-700">▶</button>
+                </div>
+              )}
+              <button onClick={closePresentation} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold">結束分享 ✕</button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto flex items-center justify-center bg-black p-6">
+            {presentationFiles.length === 0 ? (
+              <div className="max-w-2xl w-full text-slate-200 whitespace-pre-wrap leading-relaxed text-lg">{presentationCase.content}</div>
+            ) : (() => {
+              const file = presentationFiles[presentationPage];
+              if (file?.file_type === 'image') return <img src={file.file_url} alt={file.original_name} className="max-h-full max-w-full object-contain" />;
+              if (file?.file_type === 'video') return <video controls autoPlay className="max-h-full max-w-full"><source src={file.file_url} /></video>;
+              if (file?.file_type === 'pdf' || file?.file_type === 'word_html') return <iframe src={file.file_url} title={file.original_name} className="w-full h-full bg-white rounded" />;
+              return <div className="text-slate-400 text-lg">無法預覽此格式</div>;
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Archive on Close Dialog */}
+      {showArchiveDialog && (
+        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center">
+          <div className="bg-app-card border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <h3 className="text-lg font-bold text-white mb-4">要歸檔此案例嗎？</h3>
+            <div className="space-y-3 mb-5">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">分類</label>
+                <select value={archiveCategory} onChange={e => setArchiveCategory(e.target.value)} className="w-full bg-[#0f1219] border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500">
+                  <option value="健檢常見疾病">健檢常見疾病</option>
+                  <option value="操作指引">操作指引</option>
+                  <option value="其他">其他</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">標題</label>
+                <input value={archiveTitle} onChange={e => setArchiveTitle(e.target.value)} className="w-full bg-[#0f1219] border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" />
+              </div>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => { setPresentationCase(null); setShowArchiveDialog(false); }} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">不歸檔，直接關閉</button>
+              <button onClick={archivePresentation} className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-bold">確認歸檔</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal 1: Work Log - REMOVED */}
 
@@ -947,8 +1134,16 @@ export default function App() {
 
             {/* Right: History */}
             <div className="flex-1 p-5 bg-[#0f1219] overflow-y-auto">
-              <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2 sticky top-0 bg-[#0f1219] pb-2 border-b border-slate-800 z-10">
-                <FileText className="w-4 h-4 text-slate-500" /> 近期紀錄 ({selectedDevice})
+              <h4 className="text-sm font-bold text-slate-300 mb-4 flex items-center justify-between gap-2 sticky top-0 bg-[#0f1219] pb-2 border-b border-slate-800 z-10">
+                <span className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-slate-500" /> 近期紀錄 ({selectedDevice})
+                </span>
+                <button
+                  onClick={exportMaintenance}
+                  className="text-xs font-bold text-emerald-400 hover:text-emerald-300 bg-emerald-900/20 hover:bg-emerald-900/40 border border-emerald-900/50 px-3 py-1 rounded flex items-center gap-1"
+                >
+                  ⬇ 匯出 Excel
+                </button>
               </h4>
               
               <div className="space-y-3">
@@ -1377,22 +1572,17 @@ export default function App() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-400 mb-1.5">上傳圖片 (Image)</label>
+                        <label className="block text-xs font-bold text-slate-400 mb-1.5">
+                          上傳附件 (圖片 / PDF / Word / 影片)
+                        </label>
                         <input 
+                          id="guideline-file-input"
                           type="file" 
-                          accept="image/*"
-                          onChange={(e) => {
-                            if (e.target.files && e.target.files[0]) {
-                              setEditGuidelineData({...editGuidelineData, image: e.target.files[0]} as any);
-                            }
-                          }}
+                          multiple
+                          accept="image/*,.pdf,.docx,.doc,.mp4,.mov,.webm"
                           className="w-full bg-[#0f1219] border border-slate-700 rounded-lg p-2.5 text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500"
                         />
-                        {(editGuidelineData as any).image_url && !(editGuidelineData as any).image && (
-                          <div className="mt-2 text-xs text-slate-500">
-                            目前已有圖片: <a href={(editGuidelineData as any).image_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">查看圖片</a>
-                          </div>
-                        )}
+                        <p className="text-[10px] text-slate-500 mt-1">可一次選取多個檔案，支援 .jpg .png .pdf .docx .mp4 等格式</p>
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-400 mb-1.5">內容 (Content)</label>
@@ -1442,13 +1632,46 @@ export default function App() {
                     </div>
                     
                     <div className="bg-slate-800/30 rounded-2xl p-8 border border-slate-700/30 shadow-xl">
-                      {(selectedGuideline as any).image_url && (
+                      {/* Legacy image_url fallback */}
+                      {(selectedGuideline as any).image_url && guidelineFiles.length === 0 && (
                         <div className="mb-6">
                           <img 
                             src={(selectedGuideline as any).image_url} 
                             alt={selectedGuideline.title} 
                             className="w-full max-h-[400px] object-contain rounded-xl border border-slate-700/50 bg-black/20"
                           />
+                        </div>
+                      )}
+
+                      {/* New guideline_files display */}
+                      {guidelineFiles.length > 0 && (
+                        <div className="mb-6 space-y-4">
+                          {guidelineFiles.map((file: any) => (
+                            <div key={file.id} className="rounded-xl overflow-hidden border border-slate-700/50">
+                              {file.file_type === 'image' && (
+                                <img src={file.file_url} alt={file.original_name} className="w-full max-h-[400px] object-contain bg-black/20" />
+                              )}
+                              {file.file_type === 'pdf' && (
+                                <iframe src={file.file_url} title={file.original_name} className="w-full h-[500px] bg-white" />
+                              )}
+                              {file.file_type === 'video' && (
+                                <video controls className="w-full max-h-[400px] bg-black">
+                                  <source src={file.file_url} />
+                                </video>
+                              )}
+                              {file.file_type === 'word_html' && (
+                                <iframe src={file.file_url} title={file.original_name} className="w-full h-[500px] bg-white" />
+                              )}
+                              {file.file_type === 'word' && (
+                                <div className="p-4 bg-slate-900 flex items-center gap-3">
+                                  <FileText className="w-6 h-6 text-blue-400" />
+                                  <a href={file.file_url} download={file.original_name} className="text-blue-400 hover:underline font-bold">{file.original_name}</a>
+                                  <span className="text-xs text-slate-500">(下載 Word 檔)</span>
+                                </div>
+                              )}
+                              <p className="text-[10px] text-slate-500 px-3 py-1 bg-slate-900/50">{file.original_name}</p>
+                            </div>
+                          ))}
                         </div>
                       )}
                       

@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import multer from "multer";
+import mammoth from "mammoth";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(__dirname, "radportal.db");
@@ -24,7 +25,15 @@ const storage = multer.diskStorage({
     cb(null, uniqueSuffix + path.extname(file.originalname));
   }
 });
-const upload = multer({ storage: storage });
+const upload = multer({ 
+  storage: storage,
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.docx', '.doc', '.mp4', '.mov', '.webm'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, allowed.includes(ext));
+  },
+  limits: { fileSize: 200 * 1024 * 1024 } // 200MB
+});
 
 // Initialize Database
 db.exec(`
@@ -69,6 +78,18 @@ try {
     console.warn("Could not add updates column:", err);
   }
 }
+
+// Guideline files table (multi-file support)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS guideline_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guideline_id INTEGER REFERENCES disease_guidelines(id) ON DELETE CASCADE,
+    file_url TEXT NOT NULL,
+    file_type TEXT NOT NULL, -- 'image', 'pdf', 'word', 'video', 'word_html'
+    original_name TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
 
 // Migration: Add new columns if they don't exist (for existing DBs)
 try {
@@ -243,34 +264,89 @@ async function startServer() {
     }
   });
 
-  // 9. Create/Update Guideline
-  app.post("/api/guidelines", upload.single('image'), (req, res) => {
+  // 9. Create/Update Guideline (with multi-file upload)
+  app.post("/api/guidelines", upload.array('files', 10), async (req, res) => {
     try {
       const { id, category, title, content, keywords, reference_cases } = req.body;
-      const image_url = req.file ? `/uploads/${req.file.filename}` : undefined;
+      const files = req.files as Express.Multer.File[] | undefined;
+
+      let guidelineId: number | string = id;
 
       if (id) {
-        let sql = "UPDATE disease_guidelines SET category = ?, title = ?, content = ?, keywords = ?, reference_cases = ?, updated_at = CURRENT_TIMESTAMP";
-        const params = [category, title, content, keywords, reference_cases];
-        
-        if (image_url) {
-          sql += ", image_url = ?";
-          params.push(image_url);
-        }
-        
-        sql += " WHERE id = ?";
-        params.push(id);
-        
-        db.prepare(sql).run(...params);
+        db.prepare("UPDATE disease_guidelines SET category = ?, title = ?, content = ?, keywords = ?, reference_cases = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+          .run(category, title, content, keywords, reference_cases, id);
       } else {
-        db.prepare("INSERT INTO disease_guidelines (category, title, content, keywords, image_url, reference_cases) VALUES (?, ?, ?, ?, ?, ?)").run(category, title, content, keywords, image_url || null, reference_cases);
+        const info = db.prepare("INSERT INTO disease_guidelines (category, title, content, keywords, reference_cases) VALUES (?, ?, ?, ?, ?)")
+          .run(category, title, content, keywords, reference_cases);
+        guidelineId = info.lastInsertRowid as number;
       }
-      res.json({ success: true });
+
+      // Process uploaded files
+      if (files && files.length > 0) {
+        for (const file of files) {
+          const ext = path.extname(file.originalname).toLowerCase();
+          let fileType = 'image';
+          let fileUrl = `/uploads/${file.filename}`;
+
+          if (['.pdf'].includes(ext)) {
+            fileType = 'pdf';
+          } else if (['.mp4', '.mov', '.webm'].includes(ext)) {
+            fileType = 'video';
+          } else if (['.docx', '.doc'].includes(ext)) {
+            // Convert Word to HTML for browser preview
+            try {
+              const result = await mammoth.convertToHtml({ path: file.path });
+              const htmlFilename = file.filename + '.html';
+              const htmlPath = path.join(uploadDir, htmlFilename);
+              fs.writeFileSync(htmlPath, result.value);
+              fileUrl = `/uploads/${htmlFilename}`;
+              fileType = 'word_html';
+            } catch (convErr) {
+              fileType = 'word';
+              console.error("Word conversion failed:", convErr);
+            }
+          } else if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
+            fileType = 'image';
+          }
+
+          db.prepare("INSERT INTO guideline_files (guideline_id, file_url, file_type, original_name) VALUES (?, ?, ?, ?)")
+            .run(guidelineId, fileUrl, fileType, file.originalname);
+        }
+      }
+
+      res.json({ success: true, id: guidelineId });
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Database error" });
     }
   });
+
+  // 10. Get Files for a Guideline
+  app.get("/api/guidelines/:id/files", (req, res) => {
+    try {
+      const rows = db.prepare("SELECT * FROM guideline_files WHERE guideline_id = ? ORDER BY created_at ASC").all(req.params.id);
+      res.json(rows);
+    } catch (error) {
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  // 11. Delete a Guideline File
+  app.delete("/api/guidelines/:id/files/:fileId", (req, res) => {
+    try {
+      const file = db.prepare("SELECT * FROM guideline_files WHERE id = ? AND guideline_id = ?").get(req.params.fileId, req.params.id) as any;
+      if (!file) return res.status(404).json({ error: "File not found" });
+      // Delete from filesystem
+      const fullPath = path.join(uploadDir, path.basename(file.file_url));
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      db.prepare("DELETE FROM guideline_files WHERE id = ?").run(req.params.fileId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
+
 
   // --- Vite Middleware ---
   // API 404 Handler
