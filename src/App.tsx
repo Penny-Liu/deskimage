@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import * as XLSX from 'xlsx';
+import TickerOverlay from './components/TickerOverlay';
 import {
   Megaphone,
   Loader,
@@ -31,6 +32,17 @@ import {
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || 'MISSING_API_KEY' });
 
 export default function App() {
+  const [view, setView] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setView(params.get('view'));
+  }, []);
+
+  if (view === 'ticker') {
+    return <TickerOverlay />;
+  }
+
   // --- State ---
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());

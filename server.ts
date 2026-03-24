@@ -1,14 +1,18 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import multer from "multer";
 import mammoth from "mammoth";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const Database = require("better-sqlite3");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, "radportal.db");
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, "radportal.db");
+console.log(`Connecting to database at: ${dbPath}`);
 const db = new Database(dbPath);
 
 // Configure Multer for file uploads
@@ -395,4 +399,8 @@ async function startServer() {
   });
 }
 
-startServer();
+export { startServer };
+
+if (process.env.NODE_ENV !== 'test' && !process.env.ELECTRON) {
+  startServer();
+}

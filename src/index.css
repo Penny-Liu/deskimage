@@ -54,6 +54,15 @@ body {
 .marquee-content:hover {
   animation-play-state: paused;
 }
+.animate-marquee-fast {
+  animation: marquee 15s linear infinite;
+}
+.drag-none {
+  -webkit-app-region: drag;
+}
+.drag-none * {
+  -webkit-app-region: no-drag;
+}
 @keyframes marquee {
   0% { transform: translate(0, 0); }
   100% { transform: translate(-100%, 0); }
